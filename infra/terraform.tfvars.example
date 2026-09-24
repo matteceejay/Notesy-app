@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars and adjust.
+aws_region  = "us-east-1"
+app_name    = "notesy"
+github_repo = "matteceejay/Notesy-app"
+
+# Set false if your AWS account already has the token.actions.githubusercontent.com provider.
+create_github_oidc_provider = true
+
+desired_count = 1

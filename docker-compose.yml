@@ -1,0 +1,50 @@
+# Notesy local stack: Django (gunicorn) + Postgres
+# Usage: docker compose up --build   ->   http://localhost:8000  (demo / demo)
+name: notesy
+
+x-db-env: &db-env
+  POSTGRES_DB: ${POSTGRES_DB:-notesy}
+  POSTGRES_USER: ${POSTGRES_USER:-notesy}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-notesy_dev_pw}
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment: *db-env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    # Not published to the host by default. Uncomment to connect with psql/DBeaver:
+    # ports:
+    #   - "5432:5432"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: notesy:local
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-insecure-key-change-me}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-True}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      DATABASE_URL: postgres://${POSTGRES_USER:-notesy}:${POSTGRES_PASSWORD:-notesy_dev_pw}@db:5432/${POSTGRES_DB:-notesy}
+    # Migrate + seed on every start (seed is idempotent: get_or_create), then serve.
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py seed &&
+             exec gunicorn notesy.wsgi:application --bind 0.0.0.0:8000 --workers 3 --access-logfile -"
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
