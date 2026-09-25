@@ -1,29 +1,30 @@
-name: ci-cd
+name: Notesy CI/CD
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
+
 env:
-  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}         
-  ECS_SERVICE: ${{ vars.ECS_SERVICE }}         
-  CONTAINER_NAME: notesy                       
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+  CONTAINER_NAME: notesy
   APP_NAME: ${{ vars.APP_NAME }}
   JAVA_VERSION: "25"
   JFROG_URL: ${{ vars.JFROG_URL }}
   JFROG_REPO: ${{ vars.JFROG_REPO }}
-  SONAR_HOST_URL: ${{ secrets.SONAR_TOKEN }}
-  SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION  }}
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
   SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
-
-  VAULT_ADDR: ${{vars.VAULT_ADDR}}
-  VAULT_SECRET_ID: ${{secrets.VAULT_AUTH_PATH}}
-  VAULT_ROLE: ${{secrets.VAULT_ROLE}}
-  VAULT_JFROG_SECRET_PATH: ${{vars.VAULT_JFROG_SECRET_PATH}}
+  VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+  VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
+  VAULT_ROLE: ${{ secrets.VAULT_ROLE }}
+  VAULT_JFROG_SECRET_PATH: ${{ vars.VAULT_JFROG_SECRET_PATH }}
 
 jobs:
   gitleaks:
@@ -41,10 +42,50 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: "false"
 
+  build:
+    name: Build
+    needs: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build frontend bundle
+        run: npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Django system check
+        run: python manage.py check
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-js
+          path: static/js
+          retention-days: 3
 
   trivy-fs:
     name: Trivy Dependency & Config Scan
-    needs: gitleaks
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -59,3 +100,75 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "0"
+
+  test:
+    name: Tests + Coverage
+    needs: build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: notesy
+          POSTGRES_USER: notesy
+          POSTGRES_PASSWORD: notesy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U notesy -d notesy"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DJANGO_SECRET_KEY: ci-only-not-secret
+      DJANGO_DEBUG: "False"
+      DATABASE_URL: postgres://notesy:notesy@localhost:5432/notesy
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt pytest-cov
+
+      - name: Run tests with coverage
+        run: pytest --cov=apps --cov=notesy --cov-report=xml:coverage.xml
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 3
+
+  sonar:
+    name: SonarQube Analysis
+    needs: [test, trivy-fs]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download coverage report
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage
+
+      - name: Run SonarQube scan
+        uses: SonarSource/sonarqube-scan-action@v8.2.2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
+            -Dsonar.python.version=3.12
+            -Dsonar.python.coverage.reportPaths=coverage.xml
+            -Dsonar.qualitygate.wait=true
