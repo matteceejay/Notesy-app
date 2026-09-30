@@ -236,6 +236,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       artifact: ${{ steps.pkg.outputs.artifact }}
+      sha256: ${{ steps.pkg.outputs.sha256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -249,8 +250,10 @@ jobs:
         run: |
           ARTIFACT="${APP_NAME}-${GITHUB_SHA}.tar.gz"
           tar czf "$ARTIFACT" manage.py notesy apps requirements.txt static
-          sha256sum "$ARTIFACT" | tee "$ARTIFACT.sha256"
+          SHA256=$(sha256sum "$ARTIFACT" | cut -d' ' -f1)
           echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "$ARTIFACT sha256=$SHA256"
 
       - name: Read JFrog creds from Vault
         uses: hashicorp/vault-action@4c06c5ccf5c0761b6029f56cfb1dcf5565918a3b # v3
@@ -265,13 +268,12 @@ jobs:
 
       - name: Upload to Artifactory
         run: |
-          BASE="$JFROG_URL/artifactory/$JFROG_REPO/$APP_NAME/$GITHUB_SHA"
-          for f in "${{ steps.pkg.outputs.artifact }}" "${{ steps.pkg.outputs.artifact }}.sha256"; do
-            curl -fsS -u "$JFROG_USER:$JFROG_PASSWORD" \
-              -H "X-Checksum-Sha256: $(sha256sum "$f" | cut -d' ' -f1)" \
-              -T "$f" "$BASE/$f"
-            echo
-          done
+          ARTIFACT="${{ steps.pkg.outputs.artifact }}"
+          curl -fsS -u "$JFROG_USER:$JFROG_PASSWORD" \
+            -H "X-Checksum-Sha256: ${{ steps.pkg.outputs.sha256 }}" \
+            -T "$ARTIFACT" \
+            "$JFROG_URL/artifactory/$JFROG_REPO/$APP_NAME/$GITHUB_SHA/$ARTIFACT"
+          echo
 
   deploy-lightsail:
     name: Deploy to Lightsail
@@ -280,6 +282,7 @@ jobs:
     env:
       HOST: ${{ vars.LIGHTSAIL_HOST }}
       ARTIFACT: ${{ needs.package.outputs.artifact }}
+      EXPECTED_SHA256: ${{needs.package.outputs.sha256}}
     steps:
       - name: Read JFrog creds from Vault
         uses: hashicorp/vault-action@4c06c5ccf5c0761b6029f56cfb1dcf5565918a3b # v3
@@ -294,10 +297,9 @@ jobs:
 
       - name: Pull the exact artifact back from JFrog and verify it
         run: |
-          BASE="$JFROG_URL/artifactory/$JFROG_REPO/$APP_NAME/$GITHUB_SHA"
-          curl -fsS -u "$JFROG_USER:$JFROG_PASSWORD" -O "$BASE/$ARTIFACT"
-          curl -fsS -u "$JFROG_USER:$JFROG_PASSWORD" -O "$BASE/$ARTIFACT.sha256"
-          sha256sum -c "$ARTIFACT.sha256"
+          curl -fsS -u "$JFROG_USER:$JFROG_PASSWORD" -o "$ARTIFACT" \
+            "$JFROG_URL/artifactory/$JFROG_REPO/$APP_NAME/$GITHUB_SHA/$ARTIFACT"
+          echo "$EXPECTED_SHA256  $ARTIFACT" | sha256sum -c -
 
       - name: Set up SSH
         env:
