@@ -23,7 +23,7 @@ variable "create_github_oidc_provider" {
 }
 
 variable "vpc_cidr" {
-  deprecated = "cidr for the vpc."
+  description = "CIDR for the VPC."
   type    = string
   default = "10.20.0.0/16"
 }

@@ -1,0 +1,12 @@
+.git
+.github
+.env
+*.env
+.venv
+node_modules
+infra
+static/js
+staticfiles
+db.sqlite3
+coverage.xml
+**/__pycache__

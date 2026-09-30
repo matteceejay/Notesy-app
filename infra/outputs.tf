@@ -25,5 +25,6 @@ output "github_actions_variables" {
     ECS_SERVICE     = aws_ecs_service.app.name
     ECS_TASK_FAMILY = aws_ecs_task_definition.app.family
     CONTAINER_NAME  = local.container_name
+    LIGHTSAIL_HOST  = aws_lightsail_static_ip.app.ip_address
   }
 }

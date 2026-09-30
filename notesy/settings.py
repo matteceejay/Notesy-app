@@ -1,15 +1,41 @@
 """Django settings for notesy."""
+import json
 import os
+import urllib.request
 from pathlib import Path
 
+import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")  # local dev only; .env is gitignored and dockerignored
 
 
-SECRET_KEY = "django-insecure-replace-me-eventually-l0lz-h4xx-9000"
+def env_bool(name, default=False):
+    return os.environ.get(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
-DEBUG = True
 
-ALLOWED_HOSTS = ["*"]
+DEBUG = env_bool("DJANGO_DEBUG", False)
+
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured("DJANGO_SECRET_KEY must be set when DJANGO_DEBUG is off")
+    SECRET_KEY = "dev-only-insecure-key"
+
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
+
+# On ECS, the ALB health checker sends the task's private IP as the Host header.
+# Add that IP so health checks don't get a 400 from Django's host validation.
+_ecs_meta = os.environ.get("ECS_CONTAINER_METADATA_URI_V4")
+if _ecs_meta:
+    try:
+        with urllib.request.urlopen(_ecs_meta, timeout=2) as resp:
+            for net in json.load(resp).get("Networks", []):
+                ALLOWED_HOSTS += net.get("IPv4Addresses", [])
+    except Exception:
+        pass
 
 
 INSTALLED_APPS = [
@@ -24,6 +50,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -54,16 +81,14 @@ WSGI_APPLICATION = "notesy.wsgi.application"
 
 
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
+    "default": dj_database_url.config(
+        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+        conn_max_age=60,
+    )
 }
 
-
-SESSION_ENGINE = "django.contrib.sessions.backends.file"
-SESSION_FILE_PATH = str(BASE_DIR / ".sessions")
-os.makedirs(SESSION_FILE_PATH, exist_ok=True)
+# DB-backed sessions work across multiple ECS tasks and survive Lightsail release swaps.
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
 
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -80,6 +105,10 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

@@ -8,36 +8,36 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
   ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
   ECS_SERVICE: ${{ vars.ECS_SERVICE }}
-  CONTAINER_NAME: notesy
-  APP_NAME: ${{ vars.APP_NAME }}
-  JAVA_VERSION: "25"
-  JFROG_URL: ${{ vars.JFROG_URL }}
-  JFROG_REPO: ${{ vars.JFROG_REPO }}
-  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  ECS_TASK_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+  CONTAINER_NAME: ${{ vars.CONTAINER_NAME || 'notesy' }}
+  APP_NAME: ${{ vars.APP_NAME || 'notesy' }}
+  JFROG_URL: ${{ vars.JFROG_URL }}          # e.g. http://100.53.110.60:8082
+  JFROG_REPO: ${{ vars.JFROG_REPO }}        # e.g. devops-project
+  VAULT_ADDR: ${{ vars.VAULT_ADDR }}        # e.g. http://100.53.110.60:8200
+  VAULT_JFROG_SECRET_PATH: ${{ vars.VAULT_JFROG_SECRET_PATH || 'secrets/creds/jfrog' }}
   SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
   SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
-  VAULT_ADDR: ${{ vars.VAULT_ADDR }}
-  VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
-  VAULT_ROLE: ${{ secrets.VAULT_ROLE }}
-  VAULT_JFROG_SECRET_PATH: ${{ vars.VAULT_JFROG_SECRET_PATH }}
+  IS_RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
+  # ---------------------------------------------------------------- CI (every PR + main)
   gitleaks:
     name: Gitleaks Secret Scan
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v3
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: "false"
@@ -47,37 +47,23 @@ jobs:
     needs: gitleaks
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Install frontend dependencies
-        run: npm install
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Build frontend bundle
-        run: npm run build
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run build
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt
-
+      - run: pip install -r requirements.txt
       - name: Django system check
+        env:
+          DJANGO_SECRET_KEY: ci-only-not-secret
         run: python manage.py check
-
-      - name: Upload build output
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: static-js
           path: static/js
@@ -88,18 +74,15 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.36.0
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
           scanners: vuln,misconfig
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-          exit-code: "0"
+          exit-code: "0"   # flip to "1" once the backlog is clean
 
   test:
     name: Tests + Coverage
@@ -124,45 +107,31 @@ jobs:
       DJANGO_DEBUG: "False"
       DATABASE_URL: postgres://notesy:notesy@localhost:5432/notesy
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt pytest-cov
-
-      - name: Run tests with coverage
-        run: pytest --cov=apps --cov=notesy --cov-report=xml:coverage.xml
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+      - run: pip install -r requirements.txt pytest-cov
+      - run: pytest --cov=apps --cov=notesy --cov-report=xml:coverage.xml
+      - uses: actions/upload-artifact@v4
         with:
           name: coverage
           path: coverage.xml
           retention-days: 3
 
   sonar:
-    name: SonarQube Analysis
+    name: SonarCloud Analysis
     needs: [test, trivy-fs]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Download coverage report
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: coverage
-
-      - name: Run SonarQube scan
-        uses: SonarSource/sonarqube-scan-action@v8.2.2
+      - uses: SonarSource/sonarqube-scan-action@v8.2.2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
@@ -172,3 +141,197 @@ jobs:
             -Dsonar.python.version=3.12
             -Dsonar.python.coverage.reportPaths=coverage.xml
             -Dsonar.qualitygate.wait=true
+
+  # ---------------------------------------------------------------- Container path: ECR -> ECS
+  image:
+    name: Build, Scan & Push Image (ECR)
+    needs: sonar
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write          # OIDC -> AWS
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        if: env.IS_RELEASE == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        if: env.IS_RELEASE == 'true'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image name
+        id: meta
+        run: |
+          REGISTRY="${{ steps.ecr.outputs.registry || 'local' }}"
+          echo "repo=$REGISTRY/$ECR_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "image=$REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Build image (once)
+        run: docker build -t "${{ steps.meta.outputs.image }}" .
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Push SHA + latest tags
+        if: env.IS_RELEASE == 'true'
+        run: |
+          docker tag "${{ steps.meta.outputs.image }}" "${{ steps.meta.outputs.repo }}:latest"
+          docker push "${{ steps.meta.outputs.image }}"
+          docker push "${{ steps.meta.outputs.repo }}:latest"
+
+  deploy-ecs:
+    name: Deploy to ECS
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Fetch current task definition
+        run: |
+          aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" \
+            --query taskDefinition > task-definition.json
+
+      - name: Swap in the new image
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ needs.image.outputs.image }}
+
+      - name: Register + deploy, wait for stability
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
+
+  # ---------------------------------------------------------------- Artifact path: JFrog -> Lightsail
+  package:
+    name: Package & Publish Artifact (JFrog)
+    needs: sonar
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      artifact: ${{ steps.pkg.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: static-js
+          path: static/js
+
+      - name: Build release bundle
+        id: pkg
+        run: |
+          ARTIFACT="${APP_NAME}-${GITHUB_SHA}.tar.gz"
+          tar czf "$ARTIFACT" manage.py notesy apps requirements.txt static
+          sha256sum "$ARTIFACT" | tee "$ARTIFACT.sha256"
+          echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+
+      - name: Read JFrog creds from Vault
+        uses: hashicorp/vault-action@v3
+        with:
+          url: ${{ env.VAULT_ADDR }}
+          method: approle
+          roleId: ${{ secrets.VAULT_ROLE }}        # "Role ID" from vaultkey.txt
+          secretId: ${{ secrets.VAULT_SECRET_ID }} # "Secret ID" from vaultkey.txt
+          secrets: |
+            ${{ env.VAULT_JFROG_SECRET_PATH }} username | JFROG_USER ;
+            ${{ env.VAULT_JFROG_SECRET_PATH }} password | JFROG_PASSWORD
+
+      - name: Upload to Artifactory
+        run: |
+          BASE="$JFROG_URL/artifactory/$JFROG_REPO/$APP_NAME/$GITHUB_SHA"
+          for f in "${{ steps.pkg.outputs.artifact }}" "${{ steps.pkg.outputs.artifact }}.sha256"; do
+            curl -fsS -u "$JFROG_USER:$JFROG_PASSWORD" \
+              -H "X-Checksum-Sha256: $(sha256sum "$f" | cut -d' ' -f1)" \
+              -T "$f" "$BASE/$f"
+            echo
+          done
+
+  deploy-lightsail:
+    name: Deploy to Lightsail
+    needs: package
+    runs-on: ubuntu-latest
+    env:
+      HOST: ${{ vars.LIGHTSAIL_HOST }}
+      ARTIFACT: ${{ needs.package.outputs.artifact }}
+    steps:
+      - name: Read JFrog creds from Vault
+        uses: hashicorp/vault-action@v3
+        with:
+          url: ${{ env.VAULT_ADDR }}
+          method: approle
+          roleId: ${{ secrets.VAULT_ROLE }}
+          secretId: ${{ secrets.VAULT_SECRET_ID }}
+          secrets: |
+            ${{ env.VAULT_JFROG_SECRET_PATH }} username | JFROG_USER ;
+            ${{ env.VAULT_JFROG_SECRET_PATH }} password | JFROG_PASSWORD
+
+      - name: Pull the exact artifact back from JFrog and verify it
+        run: |
+          BASE="$JFROG_URL/artifactory/$JFROG_REPO/$APP_NAME/$GITHUB_SHA"
+          curl -fsS -u "$JFROG_USER:$JFROG_PASSWORD" -O "$BASE/$ARTIFACT"
+          curl -fsS -u "$JFROG_USER:$JFROG_PASSWORD" -O "$BASE/$ARTIFACT.sha256"
+          sha256sum -c "$ARTIFACT.sha256"
+
+      - name: Set up SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          echo "${{ secrets.LIGHTSAIL_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
+
+      - name: Copy + activate release
+        run: |
+          scp -i ~/.ssh/deploy_key "$ARTIFACT" "ubuntu@$HOST:/tmp/"
+          ssh -i ~/.ssh/deploy_key "ubuntu@$HOST" \
+            "SHA=$GITHUB_SHA ARTIFACT=$ARTIFACT HOST=$HOST bash -s" <<'REMOTE'
+          set -euo pipefail
+          REL=/opt/notesy/releases/$SHA
+          sudo mkdir -p "$REL"
+          sudo tar xzf "/tmp/$ARTIFACT" -C "$REL"
+          sudo python3 -m venv "$REL/.venv"
+          sudo "$REL/.venv/bin/pip" install -q -r "$REL/requirements.txt"
+          sudo chown -R notesy:notesy "$REL"
+          sudo sed -i "s/^DJANGO_ALLOWED_HOSTS=.*/DJANGO_ALLOWED_HOSTS=$HOST,localhost,127.0.0.1/" /etc/notesy/notesy.env
+          sudo -u notesy bash -c "cd '$REL' && set -a && . /etc/notesy/notesy.env && set +a && \
+            .venv/bin/python manage.py migrate --noinput && \
+            .venv/bin/python manage.py collectstatic --noinput"
+          sudo ln -sfn "$REL" /opt/notesy/current
+          sudo systemctl restart notesy
+          # keep the 5 newest releases for quick rollback
+          sudo bash -c 'ls -1dt /opt/notesy/releases/* | tail -n +6 | xargs -r rm -rf'
+          rm -f "/tmp/$ARTIFACT"
+          REMOTE
+
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 10); do
+            curl -fsS -o /dev/null "http://$HOST:8000/login/" && echo "up" && exit 0
+            sleep 3
+          done
+          echo "Lightsail app did not come up"; exit 1
