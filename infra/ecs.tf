@@ -60,9 +60,12 @@ resource "aws_ecs_task_definition" "app" {
       "python manage.py migrate --noinput && exec gunicorn notesy.wsgi:application --bind 0.0.0.0:${var.container_port} --workers 3 --access-logfile -"
     ]
 
+    # Custom domain + HTTPS settings. With app_domain empty, the app still works on the ALB's DNS name over HTTP.
     environment = [
       { name = "DJANGO_DEBUG", value = "False" },
-      { name = "DJANGO_ALLOWED_HOSTS", value = "${aws_lb.app.dns_name},localhost,127.0.0.1" },
+      { name = "DJANGO_ALLOWED_HOSTS", value = join(",", compact([var.app_domain, aws_lb.app.dns_name, "localhost", "127.0.0.1"])) },
+      { name = "DJANGO_CSRF_TRUSTED_ORIGINS", value = var.app_domain == "" ? "" : "https://${var.app_domain}" },
+      { name = "DJANGO_BEHIND_TLS_PROXY", value = var.app_domain == "" ? "False" : "True" },
     ]
 
     secrets = [

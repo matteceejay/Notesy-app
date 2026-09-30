@@ -10,6 +10,12 @@ variable "app_name" {
   default     = "notesy"
 }
 
+variable "app_domain" {
+  description = "Custom domain for the ALB, e.g. notesy.example.com (empty = none)"
+  type        = string
+  default     = ""
+}
+
 variable "github_repo" {
   description = "GitHub repo allowed to assume the deploy role, as owner/name."
   type        = string
@@ -21,6 +27,14 @@ variable "create_github_oidc_provider" {
   type        = bool
   default     = true
 }
+
+
+variable "github_oidc_sub_prefix" {
+  description = "OIDC sub prefix GitHub sends. With immutable subjects: repo:<owner>@<owner_id>/<repo>@<repo_id>. Get it with: gh api repos/<owner>/<repo>/actions/oidc/customization/sub"
+  type        = string
+  default     = "repo:matteceejay@187773256/Notesy-app@1384331480"
+}
+
 
 variable "vpc_cidr" {
   description = "CIDR for the VPC."

@@ -113,3 +113,12 @@ resource "aws_vpc_security_group_ingress_rule" "db_from_app" {
   to_port                      = 5432
   ip_protocol                  = "tcp"
 }
+
+
+resource "aws_vpc_security_group_ingress_rule" "alb_https" {
+  security_group_id = aws_security_group.alb.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+}

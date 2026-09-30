@@ -39,6 +39,18 @@ if _ecs_meta:
         pass
 
 
+# Full origins (https://host) allowed to POST forms; needed once the site is served over HTTPS
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
+]
+
+# Set when TLS ends at a proxy (ALB or Caddy) that forwards X-Forwarded-Proto
+if env_bool("DJANGO_BEHIND_TLS_PROXY", False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
