@@ -349,10 +349,11 @@ jobs:
 
       - name: Smoke test
         run: |
-          URL="https://$DOMAIN/login/"
-          [ -n "$DOMAIN" ] || URL="http://$HOST:8000/login/"
+          if [ -z "$DOMAIN" ]; then
+            echo "LIGHTSAIL_DOMAIN is not set; cannot smoke-test over HTTPS"; exit 1
+          fi
           for i in $(seq 1 10); do
-            curl -fsS -o /dev/null "$URL" && echo "up: $URL" && exit 0
+            curl -fsS -o /dev/null "https://$DOMAIN/login/" && echo "up: https://$DOMAIN/login/" && exit 0
             sleep 3
           done
-          echo "Lightsail app did not come up at $URL"; exit 1
+          echo "Lightsail app did not come up at https://$DOMAIN/login/"; exit 1
