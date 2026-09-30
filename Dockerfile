@@ -2,7 +2,8 @@
 FROM node:20-alpine AS frontend
 WORKDIR /build
 COPY package.json ./
-RUN npm install
+COPY package-lock.json ./
+RUN npm ci --ignore-scripts
 COPY tsconfig.json ./
 COPY apps/notes/static_src ./apps/notes/static_src
 RUN npm run typecheck && npm run build     # outputs static/js/*.js
@@ -16,9 +17,11 @@ WORKDIR /app
 RUN useradd --create-home --uid 1000 app
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --only-binary :all: -r requirements.txt
 
-COPY --chown=app:app . .
+COPY --chown=app:app manage.py ./
+COPY --chown=app:app notesy ./notesy
+COPY --chown=app:app apps ./apps
 COPY --from=frontend --chown=app:app /build/static/js ./static/js
 
 # Collect static files into STATIC_ROOT for WhiteNoise

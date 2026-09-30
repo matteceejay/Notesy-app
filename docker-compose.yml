@@ -5,7 +5,7 @@ name: notesy
 x-db-env: &db-env
   POSTGRES_DB: ${POSTGRES_DB:-notesy}
   POSTGRES_USER: ${POSTGRES_USER:-notesy}
-  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-notesy_dev_pw}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
 
 services:
   db:
@@ -37,7 +37,7 @@ services:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-insecure-key-change-me}
       DJANGO_DEBUG: ${DJANGO_DEBUG:-True}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
-      DATABASE_URL: postgres://${POSTGRES_USER:-notesy}:${POSTGRES_PASSWORD:-notesy_dev_pw}@db:5432/${POSTGRES_DB:-notesy}
+      DATABASE_URL: postgres://${POSTGRES_USER:-notesy}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-notesy}
     # Migrate + seed on every start (seed is idempotent: get_or_create), then serve.
     command: >
       sh -c "python manage.py migrate --noinput &&
