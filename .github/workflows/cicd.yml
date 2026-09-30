@@ -281,8 +281,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HOST: ${{ vars.LIGHTSAIL_HOST }}
+      DOMAIN: ${{ vars.LIGHTSAIL_DOMAIN }}
       ARTIFACT: ${{ needs.package.outputs.artifact }}
-      EXPECTED_SHA256: ${{needs.package.outputs.sha256}}
+      EXPECTED_SHA256: ${{ needs.package.outputs.sha256 }}
     steps:
       - name: Read JFrog creds from Vault
         uses: hashicorp/vault-action@4c06c5ccf5c0761b6029f56cfb1dcf5565918a3b # v3
@@ -322,7 +323,7 @@ jobs:
         run: |
           scp -i ~/.ssh/deploy_key "$ARTIFACT" "ubuntu@$HOST:/tmp/"
           ssh -i ~/.ssh/deploy_key "ubuntu@$HOST" \
-            "SHA=$GITHUB_SHA ARTIFACT=$ARTIFACT HOST=$HOST bash -s" <<'REMOTE'
+            "SHA=$GITHUB_SHA ARTIFACT=$ARTIFACT HOST=$HOST DOMAIN=$DOMAIN bash -s" <<'REMOTE'
           set -euo pipefail
           REL=/opt/notesy/releases/$SHA
           sudo mkdir -p "$REL"
@@ -330,7 +331,12 @@ jobs:
           sudo python3 -m venv "$REL/.venv"
           sudo "$REL/.venv/bin/pip" install -q -r "$REL/requirements.txt"
           sudo chown -R notesy:notesy "$REL"
-          sudo sed -i "s/^DJANGO_ALLOWED_HOSTS=.*/DJANGO_ALLOWED_HOSTS=$HOST,localhost,127.0.0.1/" /etc/notesy/notesy.env
+          # domain + HTTPS settings (Caddy terminates TLS in front of gunicorn)
+          sudo sed -i "s/^DJANGO_ALLOWED_HOSTS=.*/DJANGO_ALLOWED_HOSTS=${DOMAIN:+$DOMAIN,}$HOST,localhost,127.0.0.1/" /etc/notesy/notesy.env
+          if [ -n "$DOMAIN" ]; then
+            grep -q '^DJANGO_CSRF_TRUSTED_ORIGINS=' /etc/notesy/notesy.env || echo "DJANGO_CSRF_TRUSTED_ORIGINS=https://$DOMAIN" | sudo tee -a /etc/notesy/notesy.env
+            grep -q '^DJANGO_BEHIND_TLS_PROXY=' /etc/notesy/notesy.env || echo "DJANGO_BEHIND_TLS_PROXY=True" | sudo tee -a /etc/notesy/notesy.env
+          fi
           sudo -u notesy bash -c "cd '$REL' && set -a && . /etc/notesy/notesy.env && set +a && \
             .venv/bin/python manage.py migrate --noinput && \
             .venv/bin/python manage.py collectstatic --noinput"
@@ -343,8 +349,10 @@ jobs:
 
       - name: Smoke test
         run: |
+          URL="https://$DOMAIN/login/"
+          [ -n "$DOMAIN" ] || URL="http://$HOST:8000/login/"
           for i in $(seq 1 10); do
-            curl -fsS -o /dev/null "http://$HOST:8000/login/" && echo "up" && exit 0
+            curl -fsS -o /dev/null "$URL" && echo "up: $URL" && exit 0
             sleep 3
           done
-          echo "Lightsail app did not come up"; exit 1
+          echo "Lightsail app did not come up at $URL"; exit 1

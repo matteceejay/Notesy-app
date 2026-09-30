@@ -1,5 +1,6 @@
 # Lightsail VM that runs the release bundle pulled from JFrog (the non-container deploy path).
 # GitHub Actions SSHes in with the generated key, copies the bundle, and swaps releases.
+# Caddy on the box terminates HTTPS for notesy-vm.handart.site and proxies to gunicorn on 127.0.0.1:8000.
 
 resource "aws_lightsail_key_pair" "deploy" {
   name = "${var.app_name}-deploy"
@@ -23,20 +24,36 @@ resource "aws_lightsail_static_ip_attachment" "app" {
   instance_name  = aws_lightsail_instance.app.name
 }
 
+# cidrs / ipv6_cidrs are set explicitly: if left out, the provider treats them as unknown
+# and plans a destroy/recreate of this resource on every run.
 resource "aws_lightsail_instance_public_ports" "app" {
   instance_name = aws_lightsail_instance.app.name
 
   # GitHub-hosted runner IPs aren't fixed, so SSH is open; key-only auth.
   port_info {
-    protocol  = "tcp"
-    from_port = 22
-    to_port   = 22
+    protocol   = "tcp"
+    from_port  = 22
+    to_port    = 22
+    cidrs      = ["0.0.0.0/0"]
+    ipv6_cidrs = ["::/0"]
   }
 
+  # HTTP: Caddy redirects to HTTPS and answers Let's Encrypt challenges here.
   port_info {
-    protocol  = "tcp"
-    from_port = 8000
-    to_port   = 8000
+    protocol   = "tcp"
+    from_port  = 80
+    to_port    = 80
+    cidrs      = ["0.0.0.0/0"]
+    ipv6_cidrs = ["::/0"]
+  }
+
+  # HTTPS: Caddy terminates TLS and proxies to gunicorn on 127.0.0.1:8000.
+  port_info {
+    protocol   = "tcp"
+    from_port  = 443
+    to_port    = 443
+    cidrs      = ["0.0.0.0/0"]
+    ipv6_cidrs = ["::/0"]
   }
 }
 
